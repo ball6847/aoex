@@ -1,0 +1,31 @@
+version: "2"
+
+linters:
+  default: all
+  disable:
+    - depguard        # Not needed for this project
+    - exhaustruct     # Too verbose for CLI tools
+    - testableexamples # Not relevant for our test style
+    - varnamelen      # Short names are idiomatic in Go
+    - wrapcheck       # We control error handling explicitly
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - checkPrivateReceivers
+          - sayRepetitiveInsteadOfStutters
+  cyclop:
+    max-complexity: 15
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  exclude-dirs:
+    - agent-of-empires
+  max-issues-per-linter: 0
+  max-same-issues: 0
