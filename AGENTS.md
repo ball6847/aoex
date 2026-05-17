@@ -7,8 +7,8 @@
 ## Tech Stack
 
 - **Language**: Go (latest stable)
-- **CLI Framework**: `cobra` or standard `flag` + `bufio` for interactive prompts
-- **Prompt Library**: `github.com/AlecAivazis/survey/v2` or `github.com/charmbracelet/bubbletea` for wizard UX
+- **CLI Framework**: `cobra`
+- **Prompt Library**: `github.com/charmbracelet/bubbletea` for wizard UX
 - **Distribution**: Single static binary via `go build`
 
 ## Architecture

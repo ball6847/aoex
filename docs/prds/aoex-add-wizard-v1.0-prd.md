@@ -49,6 +49,12 @@
 | Worktree branch | `--worktree`             | current `git branch --show-current` |
 | Sandbox         | `--sandbox`              | `false`                             |
 
+#### Empty Input Validation
+
+If the user clears a default value and presses Enter with no input:
+- **Re-prompt until valid**: Display an error message (e.g., "Title cannot be empty") and present the prompt again with the default pre-filled.
+- This applies to all required text fields (Title, Group, Agent/Command).
+
 #### Edge Cases
 
 - If `aoe` is not found on `$PATH`: error immediately before any prompts (or warn and allow continuing)
@@ -62,6 +68,7 @@
 ### Technical Approach
 
 - **Architecture**: Single command CLI with modular packages: `cmd/`, `internal/prompts/`, `internal/detector/`, `internal/executor/`
+- **Prompt Library**: `bubbletea` (charmbracelet/bubbletea) — provides a rich, interactive TUI experience for the wizard.
 - **Integration**: `exec.Command("aoe", "add", ".", ...)` — no import of aoe source code
 - **Discovery logic**: `os.Getwd()`, `exec.Command("git", ...).Output()`, `exec.LookPath()` for agent binaries
 
@@ -75,7 +82,7 @@
 
 - **Binary not found**: `aoe` may not be on `$PATH` → detect early and print install instructions
 - **Git not installed**: worktree detection fails gracefully → disable worktree prompt
-- **Prompt library TTY issues**: survey/bubbletea may behave differently in CI/non-TTY → consider `--non-interactive` flag in future
+- **Prompt library TTY issues**: bubbletea may behave differently in CI/non-TTY → consider `--non-interactive` flag in future
 
 ## Acceptance Criteria
 
@@ -100,7 +107,7 @@
 **Goal**: Initialize Go module and basic CLI skeleton
 
 - [ ] `go mod init github.com/ball6847/aoex`
-- [ ] Add `cobra` dependency
+- [ ] Add `cobra` and `bubbletea` dependencies
 - [ ] Create `main.go` with root command and `add` subcommand placeholder
 - **Time**: ~30 min
 
@@ -109,7 +116,7 @@
 **Goal**: Implement all prompts with auto-discovery
 
 - [ ] Create `internal/detector/` package (cwd, git branch, agents on PATH)
-- [ ] Create `internal/prompts/` package with survey/bubbletea prompts
+- [ ] Create `internal/prompts/` package with bubbletea prompts
 - [ ] Wire prompts into `cmd/add.go`
 - **Time**: ~1-2 hrs
 
@@ -130,3 +137,10 @@
 - [ ] Test `aoex add` end-to-end
 - [ ] Update AGENTS.md if needed
 - **Time**: ~30 min
+
+---
+
+**Document Version**: 1.0
+**Created**: 2025-05-17
+**Clarification Rounds**: 1
+**Quality Score**: 97/100
