@@ -15,80 +15,84 @@ func TestArgsString(t *testing.T) {
 		want string
 	}{
 		{
-			name: "all defaults except title and group and cmd",
+			name: "all defaults except title and cmd",
 			args: Args{
 				Path:  ".",
 				Title: "myproject",
-				Group: "work",
 				Cmd:   "codex",
 			},
-			want: `aoe add . --title "myproject" --group "work" --cmd "codex"`,
+			want: `aoe add . --title "myproject" --cmd "codex"`,
 		},
 		{
 			name: "with custom path",
 			args: Args{
 				Path:  "/home/user/myproject",
 				Title: "myproject",
-				Group: "work",
 				Cmd:   "codex",
 			},
-			want: `aoe add "/home/user/myproject" --title "myproject" --group "work" --cmd "codex"`,
+			want: `aoe add "/home/user/myproject" --title "myproject" --cmd "codex"`,
 		},
 		{
 			name: "with launch flag",
 			args: Args{
 				Path:   ".",
 				Title:  "myproject",
-				Group:  "work",
 				Cmd:    "codex",
 				Launch: true,
 			},
-			want: `aoe add . --title "myproject" --group "work" --cmd "codex" --launch`,
+			want: `aoe add . --title "myproject" --cmd "codex" --launch`,
 		},
 		{
 			name: "with worktree",
 			args: Args{
 				Path:     ".",
 				Title:    "myproject",
-				Group:    "work",
 				Cmd:      "codex",
 				Worktree: "feature/hello",
 			},
-			want: `aoe add . --title "myproject" --group "work" --cmd "codex" --worktree "feature/hello"`,
+			want: `aoe add . --title "myproject" --cmd "codex" --worktree "feature/hello"`,
 		},
 		{
 			name: "with sandbox",
 			args: Args{
 				Path:    ".",
 				Title:   "myproject",
-				Group:   "work",
 				Cmd:     "codex",
 				Sandbox: true,
 			},
-			want: `aoe add . --title "myproject" --group "work" --cmd "codex" --sandbox`,
+			want: `aoe add . --title "myproject" --cmd "codex" --sandbox`,
+		},
+		{
+			name: "with new branch",
+			args: Args{
+				Path:      ".",
+				Title:     "myproject",
+				Cmd:       "codex",
+				NewBranch: true,
+			},
+			want: `aoe add . --title "myproject" --cmd "codex" -b`,
 		},
 		{
 			name: "all flags enabled",
 			args: Args{
-				Path:     ".",
-				Title:    "myproject",
-				Group:    "work",
-				Cmd:      "codex",
-				Launch:   true,
-				Worktree: "feature/hello",
-				Sandbox:  true,
+				Path:      ".",
+				Title:     "myproject",
+				Cmd:       "codex",
+				Launch:    true,
+				Worktree:  "feature/hello",
+				Sandbox:   true,
+				NewBranch: true,
 			},
-			want: `aoe add . --title "myproject" --group "work" --cmd "codex" --launch --worktree "feature/hello" --sandbox`,
+			want: `aoe add . --title "myproject" --cmd "codex" --launch --worktree "feature/hello" -b --sandbox`,
 		},
 		{
 			name: "empty path defaults to dot",
 			args: Args{
 				Path:  "",
 				Title: "myproject",
-				Group: "work",
 				Cmd:   "codex",
 			},
-			want: `aoe add . --title "myproject" --group "work" --cmd "codex"`,
+			want: `aoe add . --title "myproject" --cmd "codex"`,
 		},
 	}
 
@@ -110,16 +114,18 @@ func TestExec(t *testing.T) {
 	// Test 1: aoe not found when PATH is empty
 	t.Run("aoe_not_found_returns_error", func(t *testing.T) {
 		os.Setenv("PATH", "")
+
 		args := &Args{
 			Path:  ".",
 			Title: "myproject",
-			Group: "work",
 			Cmd:   "codex",
 		}
+
 		err := Exec(args)
 		if err == nil {
 			t.Fatal("Exec() should return error when aoe is not found")
 		}
+
 		if !strings.Contains(err.Error(), "aoe") {
 			t.Errorf("Exec() error = %q, should mention 'aoe'", err.Error())
 		}
@@ -130,19 +136,22 @@ func TestExec(t *testing.T) {
 		tmpDir := t.TempDir()
 		// Create a fake "aoe" that exits with code 1
 		fakeAoe := filepath.Join(tmpDir, "aoe")
+
 		script := `#!/bin/sh
 exit 1`
+
 		if err := os.WriteFile(fakeAoe, []byte(script), 0755); err != nil {
 			t.Fatalf("failed to create fake aoe: %v", err)
 		}
+
 		os.Setenv("PATH", tmpDir)
 
 		args := &Args{
 			Path:  ".",
 			Title: "myproject",
-			Group: "work",
 			Cmd:   "codex",
 		}
+
 		err := Exec(args)
 		if err == nil {
 			t.Fatal("Exec() should return error when aoe exits with code 1")
@@ -159,19 +168,22 @@ exit 1`
 		tmpDir := t.TempDir()
 		// Create a fake "aoe" that exits with code 0
 		fakeAoe := filepath.Join(tmpDir, "aoe")
+
 		script := `#!/bin/sh
 exit 0`
+
 		if err := os.WriteFile(fakeAoe, []byte(script), 0755); err != nil {
 			t.Fatalf("failed to create fake aoe: %v", err)
 		}
+
 		os.Setenv("PATH", tmpDir)
 
 		args := &Args{
 			Path:  ".",
 			Title: "myproject",
-			Group: "work",
 			Cmd:   "codex",
 		}
+
 		err := Exec(args)
 		if err != nil {
 			t.Fatalf("Exec() unexpected error = %v", err)
@@ -184,22 +196,25 @@ exit 0`
 		// Create a fake "aoe" that dumps its args to a file
 		markerFile := filepath.Join(tmpDir, "marker")
 		fakeAoe := filepath.Join(tmpDir, "aoe")
+
 		script := fmt.Sprintf(`#!/bin/sh
 echo "$@" > %q
 exit 0`, markerFile)
+
 		if err := os.WriteFile(fakeAoe, []byte(script), 0755); err != nil {
 			t.Fatalf("failed to create fake aoe: %v", err)
 		}
+
 		os.Setenv("PATH", tmpDir)
 
 		args := &Args{
-			Path:     ".",
-			Title:    "myproject",
-			Group:    "work",
-			Cmd:      "codex",
-			Launch:   true,
-			Worktree: "feature/hello",
-			Sandbox:  true,
+			Path:      ".",
+			Title:     "myproject",
+			Cmd:       "codex",
+			Launch:    true,
+			Worktree:  "feature/hello",
+			Sandbox:   true,
+			NewBranch: true,
 		}
 		if err := Exec(args); err != nil {
 			t.Fatalf("Exec() unexpected error = %v", err)
@@ -212,7 +227,7 @@ exit 0`, markerFile)
 		}
 
 		// Verify all expected args are in the output
-		for _, expected := range []string{"add", ".", "--title", "myproject", "--group", "work", "--cmd", "codex", "--launch", "--worktree", "feature/hello", "--sandbox"} {
+		for _, expected := range []string{"add", ".", "--title", "myproject", "--cmd", "codex", "--launch", "--worktree", "feature/hello", "-b", "--sandbox"} {
 			if !strings.Contains(string(gotArgs), expected) {
 				t.Errorf("command args missing %q in output: %q", expected, string(gotArgs))
 			}
@@ -224,18 +239,20 @@ exit 0`, markerFile)
 		tmpDir := t.TempDir()
 		markerFile := filepath.Join(tmpDir, "marker")
 		fakeAoe := filepath.Join(tmpDir, "aoe")
+
 		script := fmt.Sprintf(`#!/bin/sh
 echo "$@" > %q
 exit 0`, markerFile)
+
 		if err := os.WriteFile(fakeAoe, []byte(script), 0755); err != nil {
 			t.Fatalf("failed to create fake aoe: %v", err)
 		}
+
 		os.Setenv("PATH", tmpDir)
 
 		args := &Args{
 			Path:  "/home/user/myproject",
 			Title: "myproject",
-			Group: "work",
 			Cmd:   "codex",
 		}
 		if err := Exec(args); err != nil {
@@ -263,14 +280,15 @@ kill $$`
 	if err := os.WriteFile(fakeAoe, []byte(script), 0755); err != nil {
 		t.Fatalf("failed to create fake aoe: %v", err)
 	}
+
 	os.Setenv("PATH", tmpDir)
 
 	args := &Args{
 		Path:  ".",
 		Title: "myproject",
-		Group: "work",
 		Cmd:   "codex",
 	}
+
 	err := Exec(args)
 	if err == nil {
 		t.Fatal("Exec() should return error when process is killed")

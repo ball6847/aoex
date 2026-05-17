@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,19 +11,21 @@ import (
 
 // Args holds the parsed arguments for the aoe add command.
 type Args struct {
-	Path     string // positional arg, always "." for now
-	Title    string // --title
-	Group    string // --group
-	Cmd      string // --cmd
-	Launch   bool   // --launch
-	Worktree string // --worktree (omitted if empty)
-	Sandbox  bool   // --sandbox
+	Path      string // positional arg, always "." for now
+	Title     string // --title
+	Cmd       string // --cmd
+	Launch    bool   // --launch
+	Worktree  string // --worktree (omitted if empty)
+	Sandbox   bool   // --sandbox
+	NewBranch bool   // -b (create new branch)
 }
 
 // Exec builds and runs the `aoe add` command with the provided arguments.
 func Exec(args *Args) error {
 	cmdArgs := []string{"add"}
 
+	// When attaching to an existing worktree, pass its path directly.
+	// Otherwise use the current directory (worktree creation is handled by aoe).
 	if args.Path != "" && args.Path != "." {
 		cmdArgs = append(cmdArgs, args.Path)
 	} else {
@@ -30,7 +33,6 @@ func Exec(args *Args) error {
 	}
 
 	cmdArgs = append(cmdArgs, "--title", args.Title)
-	cmdArgs = append(cmdArgs, "--group", args.Group)
 	cmdArgs = append(cmdArgs, "--cmd", args.Cmd)
 
 	if args.Launch {
@@ -39,6 +41,10 @@ func Exec(args *Args) error {
 
 	if args.Worktree != "" {
 		cmdArgs = append(cmdArgs, "--worktree", args.Worktree)
+	}
+
+	if args.NewBranch {
+		cmdArgs = append(cmdArgs, "-b")
 	}
 
 	if args.Sandbox {
@@ -50,14 +56,18 @@ func Exec(args *Args) error {
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+	err := cmd.Run()
+	if err != nil {
+		exitErr := &exec.ExitError{}
+		if errors.As(err, &exitErr) {
 			stderr := strings.TrimSpace(string(exitErr.Stderr))
 			if stderr != "" {
 				return fmt.Errorf("aoe exited with code %d: %s", exitErr.ExitCode(), stderr)
 			}
+
 			return fmt.Errorf("aoe exited with code %d", exitErr.ExitCode())
 		}
+
 		return fmt.Errorf("failed to run aoe: %w", err)
 	}
 
@@ -67,28 +77,37 @@ func Exec(args *Args) error {
 // String returns the shell-like command string for review display.
 func (a *Args) String() string {
 	var b strings.Builder
+
 	b.WriteString("aoe add ")
+
 	if a.Path != "" && a.Path != "." {
 		b.WriteString(strconv.Quote(a.Path))
 		b.WriteByte(' ')
 	} else {
 		b.WriteString(". ")
 	}
+
 	b.WriteString("--title ")
 	b.WriteString(strconv.Quote(a.Title))
-	b.WriteString(" --group ")
-	b.WriteString(strconv.Quote(a.Group))
 	b.WriteString(" --cmd ")
 	b.WriteString(strconv.Quote(a.Cmd))
+
 	if a.Launch {
 		b.WriteString(" --launch")
 	}
+
 	if a.Worktree != "" {
 		b.WriteString(" --worktree ")
 		b.WriteString(strconv.Quote(a.Worktree))
 	}
+
+	if a.NewBranch {
+		b.WriteString(" -b")
+	}
+
 	if a.Sandbox {
 		b.WriteString(" --sandbox")
 	}
+
 	return b.String()
 }

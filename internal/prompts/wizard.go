@@ -3,6 +3,7 @@ package prompts
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/ball6847/aoex/internal/detector"
 	"github.com/ball6847/aoex/internal/executor"
@@ -13,13 +14,9 @@ import (
 )
 
 const (
-	stepPath int = iota
-	stepTitle
-	stepGroup
-	stepAgent
+	stepAgent int = iota
 	stepCustomAgent
-	stepLaunch
-	stepWorktree
+	stepBranch
 	stepSandbox
 	stepReview
 )
@@ -29,26 +26,35 @@ const otherOption = "Other (type manually)"
 // agentItem implements the list Item interfaces.
 type agentItem struct {
 	title string
+	desc  string
 }
 
 func (i agentItem) FilterValue() string { return i.title }
 func (i agentItem) Title() string       { return i.title }
-func (i agentItem) Description() string { return "" }
+func (i agentItem) Description() string { return i.desc }
 
 type wizardModel struct {
 	step    int
 	ctx     *detector.Context
 	answers executor.Args
 
-	pathInput     textinput.Model
-	titleInput    textinput.Model
-	groupInput    textinput.Model
-	agentList     list.Model
-	customAgent   textinput.Model
-	launchYes     bool
-	worktreeInput textinput.Model
-	sandboxYes    bool
-	reviewYes     bool
+	// Navigation history for going back.
+	stepHistory []int
+
+	// Step: Agent
+	agentList   list.Model
+	customAgent textinput.Model
+
+	// Step: Branch
+	branchFilter textinput.Model
+	branchList   list.Model
+	allBranches  []string // all branches for filtering
+
+	// Step: Sandbox
+	sandboxYes bool
+
+	// Step: Review
+	launchYes bool
 
 	errorMsg  string
 	done      bool
@@ -64,35 +70,37 @@ var (
 )
 
 func initialModel(ctx *detector.Context) wizardModel {
-	// Path input.
-	pathTi := textinput.New()
-	pathTi.Placeholder = "Path"
-	pathTi.SetValue(ctx.CWD)
-	pathTi.Focus()
-	pathTi.CharLimit = 256
-	pathTi.Width = 50
-
-	// Title input.
-	titleTi := textinput.New()
-	titleTi.Placeholder = "Title"
-	titleTi.SetValue(ctx.FolderName)
-	titleTi.Focus()
-	titleTi.CharLimit = 156
-	titleTi.Width = 50
-
-	// Group input.
-	groupTi := textinput.New()
-	groupTi.Placeholder = "Group"
-	groupTi.SetValue(ctx.ParentFolder)
-	groupTi.Focus()
-	groupTi.CharLimit = 156
-	groupTi.Width = 50
-
-	// Agent list.
-	items := make([]list.Item, 0, len(ctx.Agents)+1)
-	for _, a := range ctx.Agents {
-		items = append(items, agentItem{title: a})
+	// Build agent list: detected agents + custom agents from config + "Other"
+	defaultTool := ctx.Config.DefaultTool
+	if defaultTool == "" {
+		defaultTool = "opencode"
 	}
+
+	// Collect unique available agents.
+	agentSet := make(map[string]bool, len(ctx.Agents))
+	for _, a := range ctx.Agents {
+		agentSet[a] = true
+	}
+
+	if !agentSet[defaultTool] {
+		agentSet[defaultTool] = true
+	}
+
+	// Build ordered items; default tool first.
+	items := make([]list.Item, 0)
+	items = append(items, agentItem{title: defaultTool})
+	delete(agentSet, defaultTool)
+
+	// Then remaining agents in deterministic order.
+	remaining := make([]string, 0, len(agentSet))
+	for name := range agentSet {
+		remaining = append(remaining, name)
+	}
+
+	for _, name := range remaining {
+		items = append(items, agentItem{title: name})
+	}
+
 	items = append(items, agentItem{title: otherOption})
 
 	listHeight := len(items) + 4
@@ -113,27 +121,100 @@ func initialModel(ctx *detector.Context) wizardModel {
 	customTi.CharLimit = 156
 	customTi.Width = 50
 
-	// Worktree input.
-	worktreeTi := textinput.New()
-	worktreeTi.Placeholder = "Worktree (git branch)"
-	worktreeTi.SetValue(ctx.GitBranch)
-	worktreeTi.Focus()
-	worktreeTi.CharLimit = 156
-	worktreeTi.Width = 50
+	// Branch filter + list.
+	branchTi := textinput.New()
+	branchTi.Placeholder = "Filter or type a new branch name"
+	branchTi.SetValue(ctx.GitBranch)
+	branchTi.Focus()
+	branchTi.CharLimit = 156
+	branchTi.Width = 50
+
+	// Build branch list items.
+	branchItems := makeBranchItems(ctx.GitBranch, ctx.Branches, ctx.Worktrees)
+	branchLi := list.New(branchItems, list.NewDefaultDelegate(), 50, 15)
+	branchLi.Title = "Select a branch"
+	branchLi.SetShowStatusBar(false)
+	branchLi.SetFilteringEnabled(false)
+	branchLi.SetShowHelp(false)
 
 	return wizardModel{
-		step:          stepPath,
-		ctx:           ctx,
-		pathInput:     pathTi,
-		titleInput:    titleTi,
-		groupInput:    groupTi,
-		agentList:     agentLi,
-		customAgent:   customTi,
-		launchYes:     false,
-		worktreeInput: worktreeTi,
-		sandboxYes:    false,
-		reviewYes:     true,
+		step:         stepAgent,
+		ctx:          ctx,
+		answers:      executor.Args{Path: ctx.CWD},
+		agentList:    agentLi,
+		customAgent:  customTi,
+		branchFilter: branchTi,
+		branchList:   branchLi,
+		allBranches:  ctx.Branches,
+		sandboxYes:   ctx.Config.Sandbox,
+		launchYes:    false,
+		stepHistory:  make([]int, 0, 4),
 	}
+}
+
+func makeBranchItems(current string, branches []string, worktrees map[string]string) []list.Item {
+	items := make([]list.Item, 0, len(branches))
+	seen := make(map[string]bool)
+	// Always put current branch first.
+	if current != "" {
+		desc := ""
+		if _, ok := worktrees[current]; ok {
+			desc = "worktree exists [will attach]"
+		}
+		items = append(items, agentItem{title: current, desc: desc})
+		seen[current] = true
+	}
+
+	for _, b := range branches {
+		if seen[b] {
+			continue
+		}
+
+		seen[b] = true
+		desc := ""
+		if _, ok := worktrees[b]; ok {
+			desc = "worktree exists [will attach]"
+		}
+		items = append(items, agentItem{title: b, desc: desc})
+	}
+
+	return items
+}
+
+func filterBranchItems(current string, branches []string, worktrees map[string]string, query string) []list.Item {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return makeBranchItems(current, branches, worktrees)
+	}
+
+	items := make([]list.Item, 0)
+	seen := make(map[string]bool)
+
+	if current != "" && strings.Contains(strings.ToLower(current), q) {
+		desc := ""
+		if _, ok := worktrees[current]; ok {
+			desc = "worktree exists [will attach]"
+		}
+		items = append(items, agentItem{title: current, desc: desc})
+		seen[current] = true
+	}
+
+	for _, b := range branches {
+		if seen[b] {
+			continue
+		}
+
+		if strings.Contains(strings.ToLower(b), q) {
+			desc := ""
+			if _, ok := worktrees[b]; ok {
+				desc = "worktree exists [will attach]"
+			}
+			items = append(items, agentItem{title: b, desc: desc})
+			seen[b] = true
+		}
+	}
+
+	return items
 }
 
 // RunWizard starts the interactive wizard and returns the collected arguments.
@@ -141,14 +222,17 @@ func initialModel(ctx *detector.Context) wizardModel {
 func RunWizard(ctx *detector.Context) (*executor.Args, error) {
 	m := initialModel(ctx)
 	p := tea.NewProgram(m, tea.WithAltScreen())
+
 	finalModel, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("wizard failed: %w", err)
 	}
+
 	wm := finalModel.(wizardModel)
 	if wm.cancelled || !wm.done {
 		return nil, nil
 	}
+
 	return &wm.answers, nil
 }
 
@@ -162,53 +246,20 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			m.cancelled = true
+
 			return m, tea.Quit
+		case tea.KeyShiftTab:
+			if len(m.stepHistory) > 0 {
+				lastIdx := len(m.stepHistory) - 1
+				m.step = m.stepHistory[lastIdx]
+				m.stepHistory = m.stepHistory[:lastIdx]
+				m.errorMsg = ""
+			}
+
+			return m, nil
 		}
 
 		switch m.step {
-		case stepPath:
-			switch msg.Type {
-			case tea.KeyEnter, tea.KeyTab:
-				m.answers.Path = m.pathInput.Value()
-				m.step = stepTitle
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.pathInput, cmd = m.pathInput.Update(msg)
-			return m, cmd
-
-		case stepTitle:
-			switch msg.Type {
-			case tea.KeyEnter, tea.KeyTab:
-				m.answers.Title = m.titleInput.Value()
-				if m.answers.Title == "" {
-					m.errorMsg = "Title cannot be empty"
-					return m, nil
-				}
-				m.errorMsg = ""
-				m.step = stepGroup
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.titleInput, cmd = m.titleInput.Update(msg)
-			return m, cmd
-
-		case stepGroup:
-			switch msg.Type {
-			case tea.KeyEnter, tea.KeyTab:
-				m.answers.Group = m.groupInput.Value()
-				if m.answers.Group == "" {
-					m.errorMsg = "Group cannot be empty"
-					return m, nil
-				}
-				m.errorMsg = ""
-				m.step = stepAgent
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.groupInput, cmd = m.groupInput.Update(msg)
-			return m, cmd
-
 		case stepAgent:
 			switch msg.Type {
 			case tea.KeyEnter, tea.KeyTab:
@@ -216,17 +267,26 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if sel == nil {
 					return m, nil
 				}
+
 				item := sel.(agentItem)
 				if item.title == otherOption {
+					m.stepHistory = append(m.stepHistory, m.step)
 					m.step = stepCustomAgent
+
 					return m, nil
 				}
+
 				m.answers.Cmd = item.title
-				m.step = stepLaunch
+				m.stepHistory = append(m.stepHistory, m.step)
+				m.step = stepBranch
+
 				return m, nil
 			}
+
 			var cmd tea.Cmd
+
 			m.agentList, cmd = m.agentList.Update(msg)
+
 			return m, cmd
 
 		case stepCustomAgent:
@@ -235,91 +295,156 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.answers.Cmd = m.customAgent.Value()
 				if m.answers.Cmd == "" {
 					m.errorMsg = "Agent command cannot be empty"
+
 					return m, nil
 				}
+
 				m.errorMsg = ""
-				m.step = stepLaunch
+				m.stepHistory = append(m.stepHistory, m.step)
+				m.step = stepBranch
+
 				return m, nil
 			}
+
 			var cmd tea.Cmd
+
 			m.customAgent, cmd = m.customAgent.Update(msg)
+
 			return m, cmd
 
-		case stepLaunch:
+		case stepBranch:
 			switch msg.Type {
-			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
-				m.launchYes = !m.launchYes
-				return m, nil
 			case tea.KeyEnter, tea.KeyTab:
-				m.answers.Launch = m.launchYes
-				if m.ctx.IsGitRepo {
-					m.step = stepWorktree
-				} else {
-					m.step = stepSandbox
-				}
-				return m, nil
-			}
-			return m, nil
+				q := strings.TrimSpace(m.branchFilter.Value())
+				if reason, ok := isValidBranchName(q); !ok {
+					m.errorMsg = reason
 
-		case stepWorktree:
-			switch msg.Type {
-			case tea.KeyEnter, tea.KeyTab:
-				m.answers.Worktree = m.worktreeInput.Value()
+					return m, nil
+				}
+
+				m.errorMsg = ""
+				matched := false
+
+				for _, b := range m.allBranches {
+					if b == q {
+						matched = true
+
+						break
+					}
+				}
+
+				// Check if a worktree already exists for this branch.
+				if wkPath, ok := m.ctx.Worktrees[q]; ok {
+					// Attach to existing worktree: use its path, don't create new branch.
+					m.answers.Path = wkPath
+					m.answers.NewBranch = false
+				} else if !matched {
+					// New branch → create worktree with -b.
+					m.answers.NewBranch = true
+				}
+
+				m.answers.Worktree = q
+				m.answers.Title = q
+				m.stepHistory = append(m.stepHistory, m.step)
 				m.step = stepSandbox
+
 				return m, nil
+			case tea.KeyUp, tea.KeyDown:
+				var cmd tea.Cmd
+
+				m.branchList, cmd = m.branchList.Update(msg)
+				if sel := m.branchList.SelectedItem(); sel != nil {
+					m.branchFilter.SetValue(sel.(agentItem).title)
+				}
+
+				return m, cmd
 			}
+
 			var cmd tea.Cmd
-			m.worktreeInput, cmd = m.worktreeInput.Update(msg)
+
+			oldVal := m.branchFilter.Value()
+
+			m.branchFilter, cmd = m.branchFilter.Update(msg)
+
+			if m.branchFilter.Value() != oldVal {
+				items := filterBranchItems(m.ctx.GitBranch, m.allBranches, m.ctx.Worktrees, m.branchFilter.Value())
+				m.branchList.SetItems(items)
+
+				if len(items) > 0 {
+					m.branchList.Select(0)
+				}
+			}
+
 			return m, cmd
 
 		case stepSandbox:
 			switch msg.Type {
 			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
 				m.sandboxYes = !m.sandboxYes
+
 				return m, nil
 			case tea.KeyEnter, tea.KeyTab:
 				m.answers.Sandbox = m.sandboxYes
+				m.stepHistory = append(m.stepHistory, m.step)
 				m.step = stepReview
+
 				return m, nil
 			}
+
 			return m, nil
 
 		case stepReview:
 			switch msg.Type {
 			case tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown:
-				m.reviewYes = !m.reviewYes
+				m.launchYes = !m.launchYes
+
 				return m, nil
 			case tea.KeyEnter, tea.KeyTab:
-				if m.reviewYes {
-					m.done = true
-				} else {
-					m.cancelled = true
+				if m.launchYes {
+					m.answers.Launch = true
 				}
+
+				m.done = true
+
 				return m, tea.Quit
 			case tea.KeyRunes:
 				if len(msg.Runes) == 1 {
 					switch msg.Runes[0] {
 					case 'y', 'Y':
-						m.reviewYes = true
+						m.answers.Launch = true
 						m.done = true
+
 						return m, tea.Quit
 					case 'n', 'N':
-						m.reviewYes = false
-						m.cancelled = true
+						m.answers.Launch = false
+						m.done = true
+
 						return m, tea.Quit
 					}
 				}
 			}
+
 			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
 		m.agentList.SetWidth(msg.Width)
+
 		h := msg.Height - 10
 		if h < 5 {
 			h = 5
 		}
+
 		m.agentList.SetHeight(h)
+		m.branchList.SetWidth(msg.Width)
+
+		bh := msg.Height - 12
+		if bh < 5 {
+			bh = 5
+		}
+
+		m.branchList.SetHeight(bh)
+
 		return m, nil
 	}
 
@@ -330,71 +455,97 @@ func (m wizardModel) View() string {
 	var b strings.Builder
 
 	switch m.step {
-	case stepPath:
-		b.WriteString(titleStyle.Render("Step 1/8: Path") + "\n\n")
-		b.WriteString(m.pathInput.View() + "\n")
-		b.WriteString(hintStyle.Render("Press Enter to confirm") + "\n")
-
-	case stepTitle:
-		b.WriteString(titleStyle.Render("Step 2/8: Title") + "\n\n")
-		b.WriteString(m.titleInput.View() + "\n")
-		if m.errorMsg != "" {
-			b.WriteString(errorStyle.Render(m.errorMsg) + "\n")
-		}
-		b.WriteString(hintStyle.Render("Press Enter to confirm") + "\n")
-
-	case stepGroup:
-		b.WriteString(titleStyle.Render("Step 3/8: Group") + "\n\n")
-		b.WriteString(m.groupInput.View() + "\n")
-		if m.errorMsg != "" {
-			b.WriteString(errorStyle.Render(m.errorMsg) + "\n")
-		}
-		b.WriteString(hintStyle.Render("Press Enter to confirm") + "\n")
-
 	case stepAgent:
-		b.WriteString(titleStyle.Render("Step 4/8: Agent") + "\n\n")
+		b.WriteString(titleStyle.Render("Step 1/4: Agent") + "\n\n")
 		b.WriteString(m.agentList.View() + "\n")
-		b.WriteString(hintStyle.Render("↑/↓ to navigate, Enter to select") + "\n")
+		b.WriteString(hintStyle.Render("↑/↓ to navigate, Enter to select, Shift+Tab to go back") + "\n")
 
 	case stepCustomAgent:
-		b.WriteString(titleStyle.Render("Step 4/8: Custom Agent") + "\n\n")
+		b.WriteString(titleStyle.Render("Step 1/4: Custom Agent") + "\n\n")
 		b.WriteString(m.customAgent.View() + "\n")
+
 		if m.errorMsg != "" {
 			b.WriteString(errorStyle.Render(m.errorMsg) + "\n")
 		}
-		b.WriteString(hintStyle.Render("Press Enter to confirm") + "\n")
 
-	case stepLaunch:
-		b.WriteString(titleStyle.Render("Step 5/8: Launch immediately?") + "\n\n")
-		b.WriteString(renderToggle(m.launchYes) + "\n\n")
-		b.WriteString(hintStyle.Render("←/→ to toggle, Enter to confirm") + "\n")
+		b.WriteString(hintStyle.Render("Press Enter to confirm, Shift+Tab to go back") + "\n")
 
-	case stepWorktree:
-		b.WriteString(titleStyle.Render("Step 6/8: Worktree") + "\n\n")
-		b.WriteString(m.worktreeInput.View() + "\n")
-		b.WriteString(hintStyle.Render("Press Enter to confirm") + "\n")
+	case stepBranch:
+		b.WriteString(titleStyle.Render("Step 2/4: Branch / Worktree") + "\n\n")
+		b.WriteString(m.branchFilter.View() + "\n\n")
+		b.WriteString(m.branchList.View() + "\n")
+
+		if m.errorMsg != "" {
+			b.WriteString(errorStyle.Render(m.errorMsg) + "\n")
+		}
+
+		b.WriteString(hintStyle.Render("Type to filter, ↑/↓ to navigate, Enter to select, Shift+Tab to go back") + "\n")
+		b.WriteString(hintStyle.Render("If branch doesn't exist, it will be created with -b") + "\n")
 
 	case stepSandbox:
-		b.WriteString(titleStyle.Render("Step 7/8: Run in sandbox?") + "\n\n")
+		b.WriteString(titleStyle.Render("Step 3/4: Run in sandbox?") + "\n\n")
 		b.WriteString(renderToggle(m.sandboxYes) + "\n\n")
-		b.WriteString(hintStyle.Render("←/→ to toggle, Enter to confirm") + "\n")
+		b.WriteString(hintStyle.Render("←/→ to toggle, Enter to confirm, Shift+Tab to go back") + "\n")
 
 	case stepReview:
-		b.WriteString(titleStyle.Render("Step 8/8: Review") + "\n\n")
+		b.WriteString(titleStyle.Render("Step 4/4: Review") + "\n\n")
 		b.WriteString(m.answers.String() + "\n\n")
-		b.WriteString("Confirm execution?\n")
-		b.WriteString(renderToggle(m.reviewYes) + "\n\n")
-		b.WriteString(hintStyle.Render("y/Enter to confirm, n to cancel, ←/→ to toggle") + "\n")
+		b.WriteString("Launch immediately?\n")
+		b.WriteString(renderToggle(m.launchYes) + "\n\n")
+		b.WriteString(hintStyle.Render("y/Enter to confirm and launch, n to save without launching, ←/→ to toggle, Shift+Tab to go back") + "\n")
 	}
 
 	return b.String()
 }
 
+// isValidBranchName validates a git branch name against core git rules.
+// It rejects empty names, names starting with '.', names containing '@{',
+// names with spaces or control characters, names ending with '.lock',
+// names with double-dots, and names with consecutive slashes.
+func isValidBranchName(name string) (string, bool) {
+	if name == "" {
+		return "Branch name cannot be empty", false
+	}
+
+	if strings.HasPrefix(name, ".") {
+		return "Branch name cannot start with '.'", false
+	}
+
+	if strings.Contains(name, "@{") {
+		return "Branch name cannot contain '@{'", false
+	}
+
+	if strings.HasSuffix(name, ".lock") {
+		return "Branch name cannot end with '.lock'", false
+	}
+
+	// Check for double-dots (revision range syntax).
+	if strings.Contains(name, "..") {
+		return "Branch name cannot contain '..'", false
+	}
+
+	// Check for consecutive slashes and trailing slash.
+	if strings.Contains(name, "//") || strings.HasSuffix(name, "/") {
+		return "Branch name cannot have '//' or end with '/'", false
+	}
+
+	// Check each rune for invalid characters.
+	for _, r := range name {
+		if r == '~' || r == '^' || r == ':' || r == '\\' || r == ' ' || r == '\t' || unicode.IsControl(r) {
+			return fmt.Sprintf("Branch name contains invalid character: %q", r), false
+		}
+	}
+
+	return "", true
+}
+
 func renderToggle(yes bool) string {
 	yesStr := "Yes"
 	noStr := "No"
+
 	if yes {
 		return selectedStyle.Render("> "+yesStr) + "    " + unselectedStyle.Render(noStr)
 	}
+
 	return unselectedStyle.Render(yesStr) + "    " + selectedStyle.Render("> "+noStr)
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,7 +25,7 @@ var addCmd = &cobra.Command{
 func runAdd(cmd *cobra.Command, args []string) error {
 	// Pre-flight: verify aoe is on PATH before starting any prompts.
 	if _, err := exec.LookPath("aoe"); err != nil {
-		return fmt.Errorf("aoe binary not found in PATH. Please install agent-of-empires first")
+		return errors.New("aoe binary not found in PATH. Please install agent-of-empires first")
 	}
 
 	ctx, err := detector.DetectAll()
@@ -40,6 +41,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	// If user cancelled (nil args), exit cleanly.
 	if execArgs == nil {
 		fmt.Fprintln(os.Stderr, "Cancelled. No command executed.")
+
 		return nil
 	}
 
