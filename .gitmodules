@@ -1,0 +1,3 @@
+[submodule "agent-of-empires"]
+	path = agent-of-empires
+	url = git@github.com:njbrake/agent-of-empires.git
