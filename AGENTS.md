@@ -92,6 +92,12 @@ Write tests first to define behavior and edge cases, then write implementation t
 | 5    | Run tests → verify green      |                                |
 | 6    | Refactor if needed            |                                |
 
+**Go-specific conventions:**
+- Create `<package>_test.go` files with table-driven test functions
+- Use `t.Run(name, func(t *testing.T){...})` for each test case
+- Run tests with `go test ./...`
+- UI/TUI code (bubbletea models, interactive prompts) may skip unit tests if mocking `tea.Program` is impractical — document this in the code
+
 ### Skill Activation by Phase
 
 | Phase      | When to Activate                       | Relevant Skills                                                                                                      |
