@@ -15,7 +15,7 @@ type Args struct {
 	Title     string // --title
 	Cmd       string // --cmd
 	Launch    bool   // --launch
-	Worktree  string // --worktree (omitted if empty)
+	Worktree  string // --worktree (omitted if empty; empty when attaching to existing worktree)
 	Sandbox   bool   // --sandbox
 	NewBranch bool   // -b (create new branch)
 }
@@ -24,7 +24,9 @@ type Args struct {
 func Exec(args *Args) error {
 	cmdArgs := []string{"add"}
 
-	// When attaching to an existing worktree, pass its path directly.
+	// When attaching to an existing worktree, pass its path directly and leave Worktree empty.
+	// When creating new worktree from existing branch, pass --worktree with branch name (no -b).
+	// When creating new branch with worktree, pass --worktree with -b.
 	// Otherwise use the current directory (worktree creation is handled by aoe).
 	if args.Path != "" && args.Path != "." {
 		cmdArgs = append(cmdArgs, args.Path)

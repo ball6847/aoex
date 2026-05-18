@@ -86,6 +86,39 @@ func TestArgsString(t *testing.T) {
 			want: `aoe add . --title "myproject" --cmd "codex" --launch --worktree "feature/hello" -b --sandbox`,
 		},
 		{
+			name: "attach to existing worktree (no worktree flag)",
+			args: Args{
+				Path:      "/path/to/worktree",
+				Title:     "feature/existing",
+				Cmd:       "codex",
+				Worktree:  "", // Empty when attaching to existing worktree
+				NewBranch: false,
+			},
+			want: `aoe add "/path/to/worktree" --title "feature/existing" --cmd "codex"`,
+		},
+		{
+			name: "create worktree from existing branch (no -b flag)",
+			args: Args{
+				Path:      ".",
+				Title:     "feature/no-wt",
+				Cmd:       "codex",
+				Worktree:  "feature/no-wt",
+				NewBranch: false,
+			},
+			want: `aoe add . --title "feature/no-wt" --cmd "codex" --worktree "feature/no-wt"`,
+		},
+		{
+			name: "create new branch with worktree (-b flag)",
+			args: Args{
+				Path:      ".",
+				Title:     "feature/new",
+				Cmd:       "codex",
+				Worktree:  "feature/new",
+				NewBranch: true,
+			},
+			want: `aoe add . --title "feature/new" --cmd "codex" --worktree "feature/new" -b`,
+		},
+		{
 			name: "empty path defaults to dot",
 			args: Args{
 				Path:  "",
