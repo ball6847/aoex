@@ -335,15 +335,20 @@ func (m wizardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				// Check if a worktree already exists for this branch.
 				if wkPath, ok := m.ctx.Worktrees[q]; ok {
-					// Attach to existing worktree: use its path, don't create new branch.
+					// Attach to existing worktree: use its path directly, no --worktree flag.
 					m.answers.Path = wkPath
+					m.answers.Worktree = "" // Clear worktree to omit --worktree flag
 					m.answers.NewBranch = false
 				} else if !matched {
 					// New branch → create worktree with -b.
 					m.answers.NewBranch = true
+					m.answers.Worktree = q
+				} else {
+					// Existing branch without worktree → create worktree without -b.
+					m.answers.NewBranch = false
+					m.answers.Worktree = q
 				}
 
-				m.answers.Worktree = q
 				m.answers.Title = q
 				m.stepHistory = append(m.stepHistory, m.step)
 				m.step = stepSandbox
