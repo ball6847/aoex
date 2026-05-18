@@ -26,6 +26,8 @@ var builtInAgents = []struct {
 	{name: "settl", binary: "settl"},
 	{name: "hermes", binary: "hermes"},
 	{name: "kiro", binary: "kiro-cli"},
+	// NOTE: kimi is from a custom fork of aoe and is not yet natively supported upstream.
+	{name: "kimi", binary: "kimi"},
 	{name: "qwen", binary: "qwen"},
 }
 
